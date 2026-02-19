@@ -7,12 +7,15 @@
 #include <vector>
 #include <memory>
 #include <stdexcept>
+#include <algorithm>
 
 /**
- * Generic LCD Display Controller using templates.
+ * Generic LCD Display Controller using templates with scrolling support.
  * 
  * This class manages navigation and interaction with a list of key-value display items.
+ * Supports scrolling through items when there are more items than visible rows.
  * Widths are extracted from the DisplayItem type at compile-time.
+ * 
  * It follows SOLID principles:
  * - Single Responsibility: Manages display state and navigation logic
  * - Open/Closed: Extendable through templates and renderer injection
@@ -27,30 +30,41 @@ private:
     DisplayConfig config;
     std::vector<TDisplayItem> items;
     std::shared_ptr<IRenderer> renderer;
-    size_t navigatorRow;
+    size_t selectedItemIndex;   // Index into items vector (0 to items.size()-1)
+    size_t windowStartIndex;    // Index of first visible item in the window
     bool isSelected;
 
     /**
+     * Get the row position of the selected item within the visible window.
+     * @return Row index (0 to config.rows-1) where the cursor appears
+     */
+    size_t getNavigatorRowInWindow() const
+    {
+        return selectedItemIndex - windowStartIndex;
+    }
+
+    /**
      * Format a single row for display.
+     * @param rowIndex The row index within the visible window (0 to config.rows-1)
      */
     std::string formatRow(size_t rowIndex) const
     {
         std::string line;
+        size_t itemIndex = windowStartIndex + rowIndex;
         
         // Add navigator character (only on selected row)
-        line += (rowIndex == navigatorRow) ? config.navigatorChar : ' ';
+        line += (rowIndex == getNavigatorRowInWindow()) ? config.navigatorChar : ' ';
         
         // Add key and value with separator
-        if (rowIndex < items.size())
+        if (itemIndex < items.size())
         {
-            line += items[rowIndex].getFormattedKey();
+            line += items[itemIndex].getFormattedKey();
             line += config.separatorChar;
-            line += items[rowIndex].getFormattedValue();
+            line += items[itemIndex].getFormattedValue();
         }
         else
         {
             // Fill empty rows with spaces (no item at this row)
-            // Account for navigator (1) + separator (1) already counted
             size_t remainingSpace = (config.columns > 1) ? config.columns - 1 : 0;
             line += std::string(remainingSpace, ' ');
         }
@@ -69,13 +83,37 @@ private:
     }
 
     /**
-     * Validate row index.
+     * Validate item index.
      */
-    void validateRowIndex(size_t rowIndex) const
+    void validateItemIndex(size_t itemIndex) const
     {
-        if (rowIndex >= items.size())
+        if (itemIndex >= items.size())
         {
-            throw std::out_of_range("Row index out of range");
+            throw std::out_of_range("Item index out of range");
+        }
+    }
+
+    /**
+     * Adjust the visible window to ensure the selected item is visible.
+     * This implements the scrolling behavior.
+     */
+    void adjustWindow()
+    {
+        if (items.empty())
+        {
+            windowStartIndex = 0;
+            return;
+        }
+
+        // If selected item is above the window, scroll up
+        if (selectedItemIndex < windowStartIndex)
+        {
+            windowStartIndex = selectedItemIndex;
+        }
+        // If selected item is below the window, scroll down
+        else if (selectedItemIndex >= windowStartIndex + config.rows)
+        {
+            windowStartIndex = selectedItemIndex - config.rows + 1;
         }
     }
 
@@ -93,7 +131,7 @@ LCDDisplayController(
     std::shared_ptr<IRenderer> renderer,
     const DisplayConfig& config = DisplayConfig())
     : config(config), items(std::move(items)), 
-      renderer(renderer), navigatorRow(0), isSelected(false)
+      renderer(renderer), selectedItemIndex(0), windowStartIndex(0), isSelected(false)
 {
     // Compile-time validation: Ensure item widths fit within display columns
     // Format: [navigator(1)] + [key(KeyWidth)] + [separator(1)] + [value(ValueWidth)]
@@ -141,45 +179,65 @@ LCDDisplayController(
     }
 
     /**
-     * Navigate to previous item.
+     * Navigate to previous item (scrolls if necessary).
+     * @return true if navigation occurred, false if already at top
      */
-    void navigateUp()
+    bool navigateUp()
     {
-        if (navigatorRow > 0)
+        if (selectedItemIndex > 0)
         {
-            --navigatorRow;
+            --selectedItemIndex;
+            adjustWindow();
+            render();
+            return true;
         }
-        render();
+        return false;
     }
 
     /**
-     * Navigate to next item.
+     * Navigate to next item (scrolls if necessary).
+     * @return true if navigation occurred, false if already at bottom
      */
-    void navigateDown()
+    bool navigateDown()
     {
-        if (navigatorRow < config.rows - 1 && navigatorRow < items.size() - 1)
+        if (!items.empty() && selectedItemIndex < items.size() - 1)
         {
-            ++navigatorRow;
+            ++selectedItemIndex;
+            adjustWindow();
+            render();
+            return true;
         }
-        render();
+        return false;
     }
 
     /**
      * Mark current item as selected.
+     * @return true if state changed, false if already selected
      */
-    void selectItem()
+    bool selectItem()
     {
-        isSelected = true;
-        render();
+        if (!isSelected)
+        {
+            isSelected = true;
+            render();
+            return true;
+        }
+        return false;
     }
 
     /**
      * Mark current item as deselected.
+     * @return true if state changed, false if already deselected
      */
-    void deselectItem()
+    bool deselectItem()
     {
-        isSelected = false;
-        render();
+        if (isSelected)
+        {
+            isSelected = false;
+            render();
+            return true;
+        }
+        return false;
     }
 
     /**
@@ -188,8 +246,8 @@ LCDDisplayController(
     template<typename TValue>
     void setCurrentValue(const TValue& newValue)
     {
-        validateRowIndex(navigatorRow);
-        items[navigatorRow].setValue(newValue);
+        validateItemIndex(selectedItemIndex);
+        items[selectedItemIndex].setValue(newValue);
         render();
     }
 
@@ -198,8 +256,8 @@ LCDDisplayController(
      */
     auto getCurrentValue() const
     {
-        validateRowIndex(navigatorRow);
-        return items[navigatorRow].getValue();
+        validateItemIndex(selectedItemIndex);
+        return items[selectedItemIndex].getValue();
     }
 
     /**
@@ -207,16 +265,49 @@ LCDDisplayController(
      */
     auto getCurrentKey() const
     {
-        validateRowIndex(navigatorRow);
-        return items[navigatorRow].getKey();
+        validateItemIndex(selectedItemIndex);
+        return items[selectedItemIndex].getKey();
     }
 
     /**
-     * Get current navigator position.
+     * Get current selected item index (0-based, in the full items list).
+     */
+    size_t getSelectedItemIndex() const
+    {
+        return selectedItemIndex;
+    }
+
+    /**
+     * Get the index of the first visible item in the window.
+     */
+    size_t getWindowStartIndex() const
+    {
+        return windowStartIndex;
+    }
+
+    /**
+     * Get current navigator position within the visible window.
+     * @return Row index (0 to config.rows-1) where the cursor appears
      */
     size_t getNavigatorRow() const
     {
-        return navigatorRow;
+        return getNavigatorRowInWindow();
+    }
+
+    /**
+     * Get total number of items.
+     */
+    size_t getItemCount() const
+    {
+        return items.size();
+    }
+
+    /**
+     * Check if scrolling is possible (more items than visible rows).
+     */
+    bool canScroll() const
+    {
+        return items.size() > config.rows;
     }
 
     /**

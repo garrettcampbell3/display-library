@@ -22,7 +22,7 @@ int main(int, char**)
     using InventoryDisplayItem = DisplayItem<std::string, uint8_t, KEY_WIDTH, VALUE_WIDTH>;
     std::vector<InventoryDisplayItem> items;
 
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < 10; i++) {
         items.emplace_back("Item" + std::to_string(i + 1), static_cast<uint8_t>(0));
     }
 

@@ -1,11 +1,16 @@
-cmake_minimum_required(VERSION 3.10.0)
-project(twoRowDisplayLibrary VERSION 0.1.0 LANGUAGES C CXX)
+cmake_minimum_required(VERSION 4.0)
+project(DisplayLibraryrary VERSION 0.1.0 LANGUAGES CXX)
 
-add_executable(twoRowDisplayLibrary 
+# Build the display library
+add_subdirectory(src)
+add_subdirectory(tests)
+
+# Console demo application that showcases the library
+add_executable(twoRowDisplayApp 
     main.cpp 
-    ConsoleInputListener.cpp 
-    ConsoleRenderer.cpp
+    src/ConsoleInputListener.cpp
 )
 
-include_directories(.)
+target_link_libraries(twoRowDisplayApp PRIVATE DisplayLibrary)
 
+enable_testing()
